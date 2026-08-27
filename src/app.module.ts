@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CacheModule } from '@nestjs/cache-manager';
-import { redisStore } from 'cache-manager-ioredis-yet';
+import { createKeyv } from '@keyv/redis';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { UsersModule } from './users/users.module';
@@ -29,14 +29,15 @@ import { Category } from './products/category.entity';
     }),
     CacheModule.registerAsync({
       isGlobal: true,
-      useFactory: async () => ({
-        store: await redisStore({
-          host: process.env.REDIS_HOST || 'localhost',
-          port: parseInt(process.env.REDIS_PORT || '6379', 10),
-          db: 0,
+      useFactory: () => {
+        const host = process.env.REDIS_HOST || 'localhost';
+        const port = process.env.REDIS_PORT || '6379';
+        const db = process.env.REDIS_DB || '1';
+        return {
+          stores: [createKeyv(`redis://${host}:${port}/${db}`)],
           ttl: 60000,
-        }),
-      }),
+        };
+      },
     }),
     UsersModule,
     ProductsModule,
