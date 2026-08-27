@@ -14,6 +14,9 @@ export async function createTestApp(): Promise<INestApplication> {
   }).compile();
 
   const app = configureApp(moduleFixture.createNestApplication());
-  await app.init();
+
+  // listen() rather than init(): supertest binds an un-listening server to an
+  // ephemeral port per call, so concurrent requests race and reset connections.
+  await app.listen(0);
   return app;
 }
