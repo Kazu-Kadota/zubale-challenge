@@ -5,7 +5,7 @@ import {
   Inject,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { Order, OrderStatus } from './order.entity';
@@ -40,9 +40,52 @@ export class OrdersService {
     private orderItemsRepository: Repository<OrderItem>,
     private usersService: UsersService,
     private productsService: ProductsService,
+    private dataSource: DataSource,
     @Inject(CACHE_MANAGER)
     private cacheManager: Cache,
   ) {}
+
+  /**
+   * Takes stock atomically.
+   *
+   * The availability check lives in the WHERE clause, so Postgres evaluates
+   * "is there enough?" and "take it" as a single operation. Two concurrent
+   * orders cannot both pass it. A read-then-write cannot make that guarantee
+   * however the read is ordered, which is what allowed 25 units to be sold
+   * out of a stock of 5.
+   *
+   * Returns false when no row was updated, i.e. stock was insufficient.
+   */
+  private async takeStock(
+    manager: EntityManager,
+    productId: number,
+    quantity: number,
+  ): Promise<boolean> {
+    // TypeORM's Postgres driver returns [rows, rowCount] for UPDATE and DELETE,
+    // not the rows array - so the RETURNING rows have to be destructured out.
+    const [rows] = (await manager.query(
+      `UPDATE products
+          SET stock = stock - $1, "updatedAt" = now()
+        WHERE id = $2 AND stock >= $1
+        RETURNING id`,
+      [quantity, productId],
+    )) as [Array<{ id: number }>, number];
+
+    return rows.length > 0;
+  }
+
+  private async returnStock(
+    manager: EntityManager,
+    productId: number,
+    quantity: number,
+  ): Promise<void> {
+    await manager.query(
+      `UPDATE products
+          SET stock = stock + $1, "updatedAt" = now()
+        WHERE id = $2`,
+      [quantity, productId],
+    );
+  }
 
   async findAll(): Promise<Order[]> {
     return this.ordersRepository.find({
@@ -71,39 +114,45 @@ export class OrdersService {
   async create(createOrderDto: CreateOrderDto): Promise<Order> {
     const user = await this.usersService.findOne(createOrderDto.userId);
 
-    const order = this.ordersRepository.create({
-      userId: user.id,
-      status: OrderStatus.PENDING,
-    });
-    const savedOrder = await this.ordersRepository.save(order);
+    // One transaction for the whole order: any rejection below rolls back the
+    // order row, its items, and every stock decrement already applied. The
+    // previous code committed the order before the item loop could fail, so a
+    // rejected request still left an order behind with stock consumed.
+    const orderId = await this.dataSource.transaction(async (manager) => {
+      const savedOrder = await manager.save(
+        manager.create(Order, {
+          userId: user.id,
+          status: OrderStatus.PENDING,
+        }),
+      );
 
-    let total = 0;
-    for (const itemDto of createOrderDto.items) {
-      const product = await this.productsService.findOne(itemDto.productId);
+      let total = 0;
+      for (const itemDto of createOrderDto.items) {
+        const product = await this.productsService.findOne(itemDto.productId);
 
-      if (product.stock < itemDto.quantity) {
-        throw new BadRequestException(`Not enough stock for ${product.name}`);
+        if (!(await this.takeStock(manager, product.id, itemDto.quantity))) {
+          throw new BadRequestException(`Not enough stock for ${product.name}`);
+        }
+
+        await manager.save(
+          manager.create(OrderItem, {
+            orderId: savedOrder.id,
+            productId: product.id,
+            quantity: itemDto.quantity,
+            price: product.price,
+          }),
+        );
+
+        // `price` is a decimal column, which pg returns as a string.
+        total += Number(product.price) * itemDto.quantity;
       }
 
-      const orderItem = this.orderItemsRepository.create({
-        orderId: savedOrder.id,
-        productId: product.id,
-        quantity: itemDto.quantity,
-        price: product.price,
-      });
+      savedOrder.total = total;
+      await manager.save(savedOrder);
+      return savedOrder.id;
+    });
 
-      await this.orderItemsRepository.save(orderItem);
-      total += product.price * itemDto.quantity;
-      this.productsService.updateStock(
-        product.id,
-        product.stock - itemDto.quantity,
-      );
-    }
-
-    savedOrder.total = total;
-    await this.ordersRepository.save(savedOrder);
-
-    return this.findOne(savedOrder.id);
+    return this.findOne(orderId);
   }
 
   async updateStatus(id: number, status: OrderStatus): Promise<Order> {
@@ -146,16 +195,16 @@ export class OrdersService {
       throw new BadRequestException('Only pending orders can be cancelled');
     }
 
-    for (const item of order.items) {
-      const product = await this.productsService.findOne(item.productId);
-      await this.productsService.updateStock(
-        product.id,
-        product.stock + item.quantity,
-      );
-    }
+    // Restoring stock and marking the order cancelled must both happen or
+    // neither, or units get handed back for an order that is still live.
+    await this.dataSource.transaction(async (manager) => {
+      for (const item of order.items) {
+        await this.returnStock(manager, item.productId, item.quantity);
+      }
+      await manager.update(Order, id, { status: OrderStatus.CANCELLED });
+    });
 
-    order.status = OrderStatus.CANCELLED;
-    return this.ordersRepository.save(order);
+    return this.findOne(id);
   }
 
   async getOrderWithFullDetails(id: number): Promise<any> {
