@@ -425,9 +425,95 @@ explaining that the product is referenced by existing orders.
 | 19 | `compose.yaml` puts postgres on `backend` and redis on `cache-network` with no shared network. Harmless while the app runs on the host; breaks the moment it is containerised. | `compose.yaml:20,34` |
 | 20 | `synchronize: true` derives schema from entities on every boot. Renaming a property drops the old column and its data, silently. | `app.module.ts:28` |
 
-Findings 19 and 20 are **not addressed** in this submission: neither causes any reported
-symptom, and replacing `synchronize` with a migration system is the kind of structural
-change `INSTRUCTIONS.md` rules out. They are recorded here as risks, not defects.
+Findings 19 and 20 are **not addressed** — neither causes a reported symptom. Finding 20
+is expanded under [Recommendation: migrations](#recommendation-replace-synchronize-true-with-migrations)
+below.
+
+---
+
+## Security observations
+
+Raised by an automated security review of the baseline commit. None of these causes a
+symptom listed in `INSTRUCTIONS.md`, and none is fixed here. They are recorded because
+they were found — and because two of them are sharper readings of defects already listed
+above.
+
+### 21. No authentication or authorization on any endpoint
+
+**all controllers** · not fixed — out of scope
+
+Every route is open:
+
+- `GET /users` returns every registered email address.
+- `DELETE /users/:id` lets anyone delete any account.
+- `POST /orders` accepts an arbitrary `userId`, so anyone can place orders as anyone.
+- `PATCH /orders/:id/status` lets anyone mark any order `delivered`.
+
+Fixing this means introducing identity, guards and a session or token mechanism — a new
+subsystem, not a repair. `INSTRUCTIONS.md` states *"Do not add new features"*, so it is
+recorded here rather than built.
+
+### 2 (recast). The search cache is a poisoning vector, not just a correctness bug
+
+**`src/products/products.service.ts:53`** · fixed as finding 2
+
+Because the key is a constant, any caller controls what every other caller sees. One
+request for a nonsense term seeds an empty array under `product-search`, and every
+subsequent search — for any term, by any user — returns nothing for the full 60s TTL.
+
+That is an unauthenticated denial-of-content costing a single request. Keying the cache
+by query removes the vector as a side effect of fixing the correctness bug.
+
+### 7 (recast). The retry loop is a remote resource-exhaustion vector
+
+**`src/orders/orders.service.ts:26`** · fixed as finding 7
+
+A single `POST /orders/:id/pay` can occupy a connection for 202 seconds, unauthenticated.
+A few dozen concurrent requests exhaust the connection pool and the service stops
+answering — no special tooling required.
+
+Bounding retries to 3 attempts cuts the worst case from 202 seconds to under one, which
+closes the vector along with the latency problem.
+
+---
+
+## Recommendation: replace `synchronize: true` with migrations
+
+**`src/app.module.ts:28`** · not fixed — out of scope
+
+`synchronize: true` compares the entity classes against the live schema on every boot and
+issues whatever DDL is needed to reconcile them. Convenient in development, genuinely
+dangerous anywhere else:
+
+- **Silent data loss on rename.** Rename `Product.name` to `Product.title` and TypeORM
+  drops the `name` column — with every value in it — then adds an empty `title`. No
+  prompt, no backup, no error.
+- **Truncation on narrowing.** Reducing a column's length or precision rewrites the data
+  to fit.
+- **Races on boot.** Two instances starting together can issue conflicting DDL against
+  the same database.
+- **No history.** There is no record of what shape the schema is in, how it got there, or
+  how to roll back.
+
+The replacement is standard TypeORM:
+
+```ts
+synchronize: false,
+migrations: ['dist/migrations/*.js'],
+```
+
+plus a `DataSource` definition, `migration:generate` / `migration:run` scripts, and an
+initial migration capturing the current schema.
+
+**Why it is not done here.** It restructures the application's boot wiring and adds a
+tooling layer, while fixing none of the five reported symptoms — precisely the
+*"redesign the system"* that `INSTRUCTIONS.md` rules out. It is also load-bearing for
+this submission: fix 8 adds a nullable `transactionId` column to `Order` and relies on
+`synchronize` to create it. Switching to migrations would mean authoring that migration
+as well, expanding the change further.
+
+The recommendation stands for any real deployment: turn `synchronize` off, generate a
+baseline migration, and gate schema changes behind review.
 
 ---
 
