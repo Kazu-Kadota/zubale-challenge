@@ -28,6 +28,14 @@ export class Order {
   @Column({ name: 'user_id' })
   userId: number;
 
+  /**
+   * The provider's reference for a completed charge. Its presence is what makes
+   * repeating a payment safe: an order that already has one is never charged
+   * again, it just returns this.
+   */
+  @Column({ name: 'transaction_id', type: 'varchar', nullable: true })
+  transactionId: string | null;
+
   @OneToMany(() => OrderItem, (item) => item.order, { cascade: true, eager: true })
   items: OrderItem[];
 

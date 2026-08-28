@@ -2,7 +2,10 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException,
+  ServiceUnavailableException,
   Inject,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
@@ -14,7 +17,7 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { UsersService } from '../users/users.service';
 import { ProductsService } from '../products/products.service';
 
-const paymentService = {
+export const paymentService = {
   async processPayment(
     orderId: number,
     amount: number,
@@ -31,7 +34,11 @@ const paymentService = {
 
 @Injectable()
 export class OrdersService {
-  private maxRetries = 1000;
+  private readonly logger = new Logger(OrdersService.name);
+
+  /** Bounded: the previous 1000 attempts held a connection for 202 seconds. */
+  private readonly maxPaymentAttempts = 3;
+  private readonly paymentBackoffMs = 100;
 
   constructor(
     @InjectRepository(Order)
@@ -166,26 +173,67 @@ export class OrdersService {
   ): Promise<{ success: boolean; transactionId: string }> {
     const order = await this.findOne(orderId);
 
-    let lastError: Error;
-    for (let attempt = 0; attempt < this.maxRetries; attempt++) {
+    // Idempotent. An order that already carries a transaction has been charged,
+    // so a repeated request returns that transaction rather than charging the
+    // customer again - which is what a caller retrying after a timeout needs.
+    if (order.transactionId) {
+      return { success: true, transactionId: order.transactionId };
+    }
+
+    if (order.status !== OrderStatus.PENDING) {
+      throw new ConflictException(
+        `Order #${orderId} is ${order.status} and cannot be paid`,
+      );
+    }
+
+    let result: { success: boolean; transactionId: string } | undefined;
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= this.maxPaymentAttempts; attempt++) {
       try {
-        const result = await paymentService.processPayment(
+        result = await paymentService.processPayment(
           orderId,
           Number(order.total),
         );
-
-        if (result.success) {
-          order.status = OrderStatus.CONFIRMED;
-          await this.ordersRepository.save(order);
-          return result;
-        }
+        break;
       } catch (error) {
         lastError = error;
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        this.logger.warn(
+          `Payment attempt ${attempt}/${this.maxPaymentAttempts} failed for order #${orderId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+
+        if (attempt < this.maxPaymentAttempts) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, this.paymentBackoffMs * 2 ** (attempt - 1)),
+          );
+        }
       }
     }
 
-    throw lastError!;
+    if (!result) {
+      this.logger.error(
+        `Payment gave up for order #${orderId} after ${this.maxPaymentAttempts} attempts`,
+        lastError instanceof Error ? lastError.stack : String(lastError),
+      );
+      // 503, not 500: the provider is unreachable, this service is healthy,
+      // and the caller may retry later.
+      throw new ServiceUnavailableException(
+        `Payment could not be processed for order #${orderId}. Please try again later.`,
+      );
+    }
+
+    // Persisted outside the retry loop deliberately. The money has already
+    // moved; if this write fails, retrying would charge the customer a second
+    // time. Previously this save sat inside the try block, so a transient
+    // database error triggered exactly that.
+    await this.ordersRepository.update(orderId, {
+      status: OrderStatus.CONFIRMED,
+      transactionId: result.transactionId,
+    });
+
+    return result;
   }
 
   async cancel(id: number): Promise<Order> {
