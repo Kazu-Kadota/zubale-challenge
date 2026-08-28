@@ -1,4 +1,13 @@
-import { Controller, Get, Post, Patch, Body, Param, ParseIntPipe, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Body,
+  Param,
+  ParseIntPipe,
+  Query,
+} from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
@@ -8,7 +17,9 @@ export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   @Get()
-  findAll(@Query('userId', new ParseIntPipe({ optional: true })) userId?: number) {
+  findAll(
+    @Query('userId', new ParseIntPipe({ optional: true })) userId?: number,
+  ) {
     if (userId !== undefined) {
       return this.ordersService.findByUser(userId);
     }

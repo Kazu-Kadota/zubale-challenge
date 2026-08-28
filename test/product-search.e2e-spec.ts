@@ -19,7 +19,10 @@ describe('Product search (e2e)', () => {
   // earlier runs against the same database.
   const token = `s${Date.now()}`;
 
-  const createProduct = async (name: string, description?: string): Promise<number> => {
+  const createProduct = async (
+    name: string,
+    description?: string,
+  ): Promise<number> => {
     const { body } = await http()
       .post('/products')
       .send({ name, description, price: 10, stock: 5, categoryId })
@@ -28,7 +31,10 @@ describe('Product search (e2e)', () => {
   };
 
   const search = async (q: string): Promise<any[]> => {
-    const { body } = await http().get('/products/search').query({ q }).expect(200);
+    const { body } = await http()
+      .get('/products/search')
+      .query({ q })
+      .expect(200);
     return body;
   };
 

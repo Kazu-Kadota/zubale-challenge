@@ -1,9 +1,4 @@
-import {
-  Injectable,
-  NotFoundException,
-  Inject,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, NotFoundException, Inject, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ILike, Repository } from 'typeorm';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
@@ -11,6 +6,19 @@ import { Cache } from 'cache-manager';
 import { Product } from './product.entity';
 import { Category } from './category.entity';
 import { CreateProductDto, CreateCategoryDto } from './dto/create-product.dto';
+
+export interface CategoryAncestor {
+  id: number;
+  name: string;
+  parent?: CategoryAncestor;
+}
+
+export interface CategoryTreeNode {
+  id: number;
+  name: string;
+  children: CategoryTreeNode[];
+  parent?: CategoryAncestor;
+}
 
 export interface BatchFailure {
   id: number;
@@ -64,7 +72,7 @@ export class ProductsService {
   }
 
   async findOne(id: number): Promise<Product> {
-    const product = await this.productsRepository.findOne({ 
+    const product = await this.productsRepository.findOne({
       where: { id },
       relations: ['category'],
     });
@@ -104,10 +112,7 @@ export class ProductsService {
     // JavaScript. ILike is case-insensitive, matching the previous behaviour.
     const results = await this.productsRepository.find({
       where: term
-        ? [
-            { name: ILike(`%${term}%`) },
-            { description: ILike(`%${term}%`) },
-          ]
+        ? [{ name: ILike(`%${term}%`) }, { description: ILike(`%${term}%`) }]
         : {},
     });
 
@@ -116,7 +121,9 @@ export class ProductsService {
   }
 
   async findAllCategories(): Promise<Category[]> {
-    return this.categoriesRepository.find({ relations: ['parent', 'children'] });
+    return this.categoriesRepository.find({
+      relations: ['parent', 'children'],
+    });
   }
 
   async findCategory(id: number): Promise<Category> {
@@ -148,7 +155,7 @@ export class ProductsService {
    * Loading every category once and indexing it in memory removes the depth
    * limit entirely and costs one query instead of one per node.
    */
-  async getCategoryTree(categoryId: number): Promise<any> {
+  async getCategoryTree(categoryId: number): Promise<CategoryTreeNode> {
     const categories = await this.categoriesRepository.find();
 
     const byId = new Map<number, Category>();
@@ -173,7 +180,10 @@ export class ProductsService {
 
     // `seen` guards against a cycle in the data, which would otherwise recurse
     // until the stack gives out.
-    const descendants = (category: Category, seen: Set<number>): any => {
+    const descendants = (
+      category: Category,
+      seen: Set<number>,
+    ): CategoryTreeNode => {
       if (seen.has(category.id)) {
         return { id: category.id, name: category.name, children: [] };
       }
@@ -188,7 +198,10 @@ export class ProductsService {
       };
     };
 
-    const ancestors = (parentId: number | null, seen: Set<number>): any => {
+    const ancestors = (
+      parentId: number | null,
+      seen: Set<number>,
+    ): CategoryAncestor | undefined => {
       if (parentId === null || parentId === undefined || seen.has(parentId)) {
         return undefined;
       }

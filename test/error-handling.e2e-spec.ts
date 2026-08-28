@@ -59,7 +59,10 @@ describe('Error handling (e2e)', () => {
 
     const { body: order } = await http()
       .post('/orders')
-      .send({ userId: user.id, items: [{ productId: referencedProductId, quantity: 1 }] })
+      .send({
+        userId: user.id,
+        items: [{ productId: referencedProductId, quantity: 1 }],
+      })
       .expect(201);
     orderId = order.id;
   }, 30000);
@@ -70,15 +73,26 @@ describe('Error handling (e2e)', () => {
 
   describe('POST /products/batch', () => {
     it('names the missing field instead of blaming batch processing', async () => {
-      const { body } = await http().post('/products/batch').send({}).expect(400);
+      const { body } = await http()
+        .post('/products/batch')
+        .send({})
+        .expect(400);
 
       expect(JSON.stringify(body.message)).toContain('productIds');
-      expect(JSON.stringify(body.message)).not.toContain('Batch processing failed');
+      expect(JSON.stringify(body.message)).not.toContain(
+        'Batch processing failed',
+      );
     });
 
     it('rejects a productIds value that is not an array of numbers', async () => {
-      await http().post('/products/batch').send({ productIds: 'not-an-array' }).expect(400);
-      await http().post('/products/batch').send({ productIds: ['a', 'b'] }).expect(400);
+      await http()
+        .post('/products/batch')
+        .send({ productIds: 'not-an-array' })
+        .expect(400);
+      await http()
+        .post('/products/batch')
+        .send({ productIds: ['a', 'b'] })
+        .expect(400);
     });
   });
 
@@ -131,7 +145,11 @@ describe('Error handling (e2e)', () => {
     it('never leaks a bare 500 for a client mistake', async () => {
       const statuses = [
         (await http().post('/products/batch').send({})).status,
-        (await http().patch(`/orders/${orderId}/status`).send({ status: 'banana' })).status,
+        (
+          await http()
+            .patch(`/orders/${orderId}/status`)
+            .send({ status: 'banana' })
+        ).status,
         (await http().get('/orders').query({ userId: 'abc' })).status,
         (await http().delete(`/products/${referencedProductId}`)).status,
       ];

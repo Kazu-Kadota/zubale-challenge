@@ -16,11 +16,12 @@ import { OrderItem } from './order-item.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UsersService } from '../users/users.service';
 import { ProductsService } from '../products/products.service';
+import { Product } from '../products/product.entity';
 
 export const paymentService = {
   async processPayment(
-    orderId: number,
-    amount: number,
+    _orderId: number,
+    _amount: number,
   ): Promise<{ success: boolean; transactionId: string }> {
     await new Promise((resolve) => setTimeout(resolve, 100));
 
@@ -68,17 +69,16 @@ export class OrdersService {
     productId: number,
     quantity: number,
   ): Promise<boolean> {
-    // TypeORM's Postgres driver returns [rows, rowCount] for UPDATE and DELETE,
-    // not the rows array - so the RETURNING rows have to be destructured out.
-    const [rows] = (await manager.query(
-      `UPDATE products
-          SET stock = stock - $1, "updatedAt" = now()
-        WHERE id = $2 AND stock >= $1
-        RETURNING id`,
-      [quantity, productId],
-    )) as [Array<{ id: number }>, number];
+    const result = await manager
+      .createQueryBuilder()
+      .update(Product)
+      .set({ stock: () => 'stock - :quantity' })
+      .where('id = :id')
+      .andWhere('stock >= :quantity')
+      .setParameters({ id: productId, quantity })
+      .execute();
 
-    return rows.length > 0;
+    return (result.affected ?? 0) > 0;
   }
 
   private async returnStock(
@@ -86,12 +86,13 @@ export class OrdersService {
     productId: number,
     quantity: number,
   ): Promise<void> {
-    await manager.query(
-      `UPDATE products
-          SET stock = stock + $1, "updatedAt" = now()
-        WHERE id = $2`,
-      [quantity, productId],
-    );
+    await manager
+      .createQueryBuilder()
+      .update(Product)
+      .set({ stock: () => 'stock + :quantity' })
+      .where('id = :id')
+      .setParameters({ id: productId, quantity })
+      .execute();
   }
 
   async findAll(): Promise<Order[]> {

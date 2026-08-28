@@ -1,4 +1,11 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  ManyToOne,
+  OneToMany,
+  JoinColumn,
+} from 'typeorm';
 import { Product } from './product.entity';
 
 @Entity('categories')
@@ -15,7 +22,9 @@ export class Category {
   @Column({ name: 'parent_id', nullable: true })
   parentId: number | null;
 
-  @ManyToOne(() => Category, (category) => category.children, { nullable: true })
+  @ManyToOne(() => Category, (category) => category.children, {
+    nullable: true,
+  })
   @JoinColumn({ name: 'parent_id' })
   parent: Category;
 

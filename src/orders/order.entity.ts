@@ -1,4 +1,12 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  ManyToOne,
+  OneToMany,
+  JoinColumn,
+} from 'typeorm';
 import { User } from '../users/user.entity';
 import { OrderItem } from './order-item.entity';
 
@@ -36,7 +44,10 @@ export class Order {
   @Column({ name: 'transaction_id', type: 'varchar', nullable: true })
   transactionId: string | null;
 
-  @OneToMany(() => OrderItem, (item) => item.order, { cascade: true, eager: true })
+  @OneToMany(() => OrderItem, (item) => item.order, {
+    cascade: true,
+    eager: true,
+  })
   items: OrderItem[];
 
   @CreateDateColumn()

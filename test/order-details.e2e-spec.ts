@@ -40,7 +40,10 @@ describe('Order full details (e2e)', () => {
 
     const { body: order } = await http()
       .post('/orders')
-      .send({ userId: user.id, items: [{ productId: product.id, quantity: 2 }] })
+      .send({
+        userId: user.id,
+        items: [{ productId: product.id, quantity: 2 }],
+      })
       .expect(201);
     orderId = order.id;
   }, 30000);

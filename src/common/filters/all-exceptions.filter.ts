@@ -16,7 +16,7 @@ const FOREIGN_KEY_VIOLATION = '23503';
 const UNIQUE_VIOLATION = '23505';
 const INVALID_TEXT_REPRESENTATION = '22P02';
 
-interface PostgresDriverError {
+interface PostgresDriverError extends Error {
   code?: string;
   table?: string;
   detail?: string;
@@ -47,7 +47,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     // The original exception carries the detail worth keeping; the translated
     // one only carries what is safe to hand back.
-    if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
+    const serverErrorThreshold: number = HttpStatus.INTERNAL_SERVER_ERROR;
+    if (status >= serverErrorThreshold) {
       this.logger.error(
         `${request.method} ${request.url} -> ${status}`,
         exception instanceof Error ? exception.stack : String(exception),
@@ -61,7 +62,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const body = httpException.getResponse();
     response
       .status(status)
-      .json(typeof body === 'string' ? { statusCode: status, message: body } : body);
+      .json(
+        typeof body === 'string' ? { statusCode: status, message: body } : body,
+      );
   }
 
   private toHttpException(exception: unknown): HttpException {
@@ -70,14 +73,18 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     if (exception instanceof QueryFailedError) {
-      return this.translateDriverError(exception);
+      return this.translateDriverError(
+        exception as QueryFailedError<PostgresDriverError>,
+      );
     }
 
     return new InternalServerErrorException();
   }
 
-  private translateDriverError(exception: QueryFailedError): HttpException {
-    const driverError = exception.driverError as PostgresDriverError | undefined;
+  private translateDriverError(
+    exception: QueryFailedError<PostgresDriverError>,
+  ): HttpException {
+    const driverError: PostgresDriverError | undefined = exception.driverError;
 
     switch (driverError?.code) {
       case FOREIGN_KEY_VIOLATION:
@@ -98,7 +105,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
         return new HttpException(
           {
             statusCode: HttpStatus.BAD_REQUEST,
-            message: 'One or more values are not valid for their expected type.',
+            message:
+              'One or more values are not valid for their expected type.',
             error: 'Bad Request',
           },
           HttpStatus.BAD_REQUEST,

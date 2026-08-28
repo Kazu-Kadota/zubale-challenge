@@ -72,7 +72,9 @@ describe('Payment (e2e)', () => {
 
       expect(body).toMatchObject({ success: true, transactionId: 'TXN-OK' });
 
-      const { body: order } = await http().get(`/orders/${orderId}`).expect(200);
+      const { body: order } = await http()
+        .get(`/orders/${orderId}`)
+        .expect(200);
       expect(order.status).toBe('confirmed');
       expect(order.transactionId).toBe('TXN-OK');
     });
@@ -95,7 +97,7 @@ describe('Payment (e2e)', () => {
 
   describe('an order that is not payable', () => {
     it('refuses to charge a cancelled order', async () => {
-      jest
+      const spy = jest
         .spyOn(paymentService, 'processPayment')
         .mockResolvedValue({ success: true, transactionId: 'TXN-NEVER' });
 
@@ -103,7 +105,7 @@ describe('Payment (e2e)', () => {
       await http().post(`/orders/${orderId}/cancel`).expect(201);
 
       await http().post(`/orders/${orderId}/pay`).expect(409);
-      expect(paymentService.processPayment).not.toHaveBeenCalled();
+      expect(spy).not.toHaveBeenCalled();
     });
   });
 
@@ -124,7 +126,9 @@ describe('Payment (e2e)', () => {
       expect(spy.mock.calls.length).toBeLessThanOrEqual(5);
       expect(elapsedMs).toBeLessThan(5000);
 
-      const { body: order } = await http().get(`/orders/${orderId}`).expect(200);
+      const { body: order } = await http()
+        .get(`/orders/${orderId}`)
+        .expect(200);
       expect(order.status).toBe('pending');
       expect(order.transactionId).toBeNull();
     }, 30000);

@@ -21,7 +21,7 @@ export class UsersService {
     if (cached) {
       return cached;
     }
-    
+
     const users = await this.usersRepository.find();
     await this.cacheManager.set(cacheKey, users, 60000);
     return users;
@@ -38,7 +38,7 @@ export class UsersService {
     if (!user) {
       throw new NotFoundException(`User #${id} not found`);
     }
-    
+
     await this.cacheManager.set(cacheKey, user, 60000);
     return user;
   }

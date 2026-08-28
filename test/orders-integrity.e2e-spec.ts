@@ -44,7 +44,10 @@ describe('Order integrity (e2e)', () => {
     const stamp = Date.now();
     const { body: user } = await http()
       .post('/users')
-      .send({ email: `integrity-${stamp}@test.local`, name: 'Integrity Fixture' })
+      .send({
+        email: `integrity-${stamp}@test.local`,
+        name: 'Integrity Fixture',
+      })
       .expect(201);
     userId = user.id;
 
@@ -106,7 +109,9 @@ describe('Order integrity (e2e)', () => {
       const product = await createProduct(5);
 
       const attempts = Array.from({ length: 5 }, () =>
-        http().post('/orders').send({ userId, items: [{ productId: product, quantity: 5 }] }),
+        http()
+          .post('/orders')
+          .send({ userId, items: [{ productId: product, quantity: 5 }] }),
       );
       const responses = await Promise.all(attempts);
 
@@ -122,7 +127,9 @@ describe('Order integrity (e2e)', () => {
       const product = await createProduct(10);
 
       const attempts = Array.from({ length: 8 }, () =>
-        http().post('/orders').send({ userId, items: [{ productId: product, quantity: 3 }] }),
+        http()
+          .post('/orders')
+          .send({ userId, items: [{ productId: product, quantity: 3 }] }),
       );
       const responses = await Promise.all(attempts);
 
