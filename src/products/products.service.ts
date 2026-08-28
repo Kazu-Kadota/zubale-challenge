@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, BadRequestException, Inject } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  Inject,
+  Logger,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ILike, Repository } from 'typeorm';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
@@ -7,8 +12,21 @@ import { Product } from './product.entity';
 import { Category } from './category.entity';
 import { CreateProductDto, CreateCategoryDto } from './dto/create-product.dto';
 
+export interface BatchFailure {
+  id: number;
+  reason: string;
+}
+
+export interface BatchResult {
+  success: boolean;
+  processed: number;
+  failed: BatchFailure[];
+}
+
 @Injectable()
 export class ProductsService {
+  private readonly logger = new Logger(ProductsService.name);
+
   constructor(
     @InjectRepository(Product)
     private productsRepository: Repository<Product>,
@@ -197,24 +215,39 @@ export class ProductsService {
     return tree;
   }
 
-  async processProductBatch(productIds: number[]): Promise<{ success: boolean; processed: number }> {
+  /**
+   * Processes each product independently, and reports what happened to each.
+   *
+   * The previous version swallowed every failure into a bare
+   * "Error processing product" log line - no id, no reason - and returned
+   * `success: true` regardless, so a caller could not tell a complete run from
+   * one that silently dropped records.
+   *
+   * The outer try/catch is gone: it existed to catch iterating over an
+   * undefined body, which ProcessBatchDto now rejects with a 400 before the
+   * request reaches this method.
+   */
+  async processProductBatch(productIds: number[]): Promise<BatchResult> {
+    const failed: BatchFailure[] = [];
     let processed = 0;
-    
-    try {
-      for (const id of productIds) {
-        try {
-          const product = await this.findOne(id);
-          product.updatedAt = new Date();
-          await this.productsRepository.save(product);
-          processed++;
-        } catch (error) {
-          console.log('Error processing product');
-        }
+
+    for (const id of productIds) {
+      try {
+        const product = await this.findOne(id);
+        product.updatedAt = new Date();
+        await this.productsRepository.save(product);
+        processed++;
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        this.logger.warn(`Batch: product #${id} was not processed - ${reason}`);
+        failed.push({ id, reason });
       }
-    } catch (error) {
-      throw new BadRequestException('Batch processing failed');
     }
 
-    return { success: true, processed };
+    if (processed > 0) {
+      await this.invalidateSearchCache();
+    }
+
+    return { success: failed.length === 0, processed, failed };
   }
 }
