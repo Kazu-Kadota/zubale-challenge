@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { ILike, Repository } from 'typeorm';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { Product } from './product.entity';
@@ -17,6 +17,29 @@ export class ProductsService {
     @Inject(CACHE_MANAGER)
     private cacheManager: Cache,
   ) {}
+
+  private readonly searchCacheTtlMs = 60000;
+  private readonly searchVersionKey = 'product-search:version';
+  private readonly searchVersionTtlMs = 24 * 60 * 60 * 1000;
+
+  private async searchVersion(): Promise<number> {
+    return (await this.cacheManager.get<number>(this.searchVersionKey)) ?? 1;
+  }
+
+  /**
+   * Invalidates every cached search at once by bumping a version that is part
+   * of each key, so previous entries become unreachable and expire on their
+   * own. Redis has no delete-by-pattern through the cache-manager interface,
+   * and enumerating keys to delete them would be O(keys) on every write.
+   */
+  private async invalidateSearchCache(): Promise<void> {
+    const next = (await this.searchVersion()) + 1;
+    await this.cacheManager.set(
+      this.searchVersionKey,
+      next,
+      this.searchVersionTtlMs,
+    );
+  }
 
   async findAll(): Promise<Product[]> {
     return this.productsRepository.find({ relations: ['category'] });
@@ -35,28 +58,42 @@ export class ProductsService {
 
   async create(createProductDto: CreateProductDto): Promise<Product> {
     const product = this.productsRepository.create(createProductDto);
-    return this.productsRepository.save(product);
+    const saved = await this.productsRepository.save(product);
+    await this.invalidateSearchCache();
+    return saved;
   }
 
   async remove(id: number): Promise<void> {
     const product = await this.findOne(id);
     await this.productsRepository.remove(product);
+    await this.invalidateSearchCache();
   }
 
   async searchProducts(query: string): Promise<Product[]> {
-    const cacheKey = 'product-search';
+    const term = query.trim().toLowerCase();
+
+    // The query is part of the key. Previously every search shared the single
+    // key 'product-search', so the first caller's results were served to every
+    // other query for the next 60 seconds.
+    const cacheKey = `product-search:v${await this.searchVersion()}:${term}`;
+
     const cached = await this.cacheManager.get<Product[]>(cacheKey);
     if (cached) {
       return cached;
     }
 
-    const products = await this.productsRepository.find();
-    const results = products.filter(p => 
-      p.name.toLowerCase().includes(query.toLowerCase()) ||
-      (p.description || '').toLowerCase().includes(query.toLowerCase())
-    );
+    // Filtered in SQL rather than by loading the whole table and filtering in
+    // JavaScript. ILike is case-insensitive, matching the previous behaviour.
+    const results = await this.productsRepository.find({
+      where: term
+        ? [
+            { name: ILike(`%${term}%`) },
+            { description: ILike(`%${term}%`) },
+          ]
+        : {},
+    });
 
-    await this.cacheManager.set(cacheKey, results, 60000);
+    await this.cacheManager.set(cacheKey, results, this.searchCacheTtlMs);
     return results;
   }
 
