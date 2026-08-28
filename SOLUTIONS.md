@@ -55,6 +55,9 @@ smaller change, but it is not idempotent — the caller still cannot safely retr
 timeout. Persisting the transaction and returning it on repeat is the behaviour a payment
 flow actually needs. This adds one nullable column to `Order`.
 
+> This entry was revised during the work. The original plan chose the `409`; see
+> [Where the work departed from this plan](#where-the-work-departed-from-this-plan).
+
 **Batch response extended additively.** `{ success, processed }` cannot express a partial
 failure, which is the whole defect. Adding `failed: [{id, reason}]` and defining
 `success = failed.length === 0` keeps both existing fields meaningful, so current callers
@@ -75,6 +78,74 @@ Ordered by dependency, then by severity.
 | 7 | 9, 15, 16, 18 | Batch reporting and the remaining efficiency items |
 
 Each step is one commit for the failing tests, one commit for the fix.
+
+## Outcome
+
+All fourteen defects are fixed, each as a pair of commits: the failing specs first, then
+the change that makes them pass.
+
+| Findings | Commit | What it does |
+|---|---|---|
+| 1 | `d2d3265` | Cache entries reach Redis; `REDIS_DB` honoured |
+| 10–14 | `d03f7c1` | DTOs on the two unvalidated endpoints, plus a global exception filter |
+| 5, 6 | `3554b9b` | One transaction per order; stock taken with a conditional atomic update |
+| 7, 8 | `50a2402` | 3 attempts with backoff; payment idempotent via a stored `transaction_id` |
+| 2, 16, 17 | `b9735c2` | Cache keyed by query, filtering in SQL, invalidation on catalogue writes |
+| 3, 4 | `5f6cbc0` | Tree built from one query with unbounded depth; circular reference removed |
+| 9 | `a99db1d` | Per-item outcomes reported instead of blanket success |
+
+Supporting commits: `e5d0f3d` made the e2e harness deterministic (serial execution, real
+teardown, a listening server for the concurrency specs) and `084f171` brought `pnpm lint`
+from 180 problems to none.
+
+**Verification:** 40 e2e specs across 9 suites, run against the real Postgres and Redis.
+
+```bash
+docker compose up -d
+pnpm test:e2e
+```
+
+### Numbers worth quoting
+
+| | Before | After |
+|---|---|---|
+| Cache entries in Redis | 0 | present, on the configured DB |
+| Concurrent orders, stock 5, 5 units each | 5 orders created, 25 units sold | 1 order, 4 rejected |
+| Payment against a failing provider | 202 seconds, then a 500 | 327 ms, then a 503 |
+| Repeated payment on a confirmed order | charged again, new transaction id | original transaction returned |
+| Rejected order | order row + item + stock consumed | nothing persisted |
+| `/categories/:id/tree` on a 3-level chain | 500 on every node | full tree, both directions |
+| `/orders/:id/full` | 500, always | 200 |
+| `pnpm lint` | 180 problems | 0 |
+
+## Where the work departed from this plan
+
+Four things changed once the code was in front of us. Recording them because the
+deviations are more informative than the parts that went as expected.
+
+**Payment idempotency became real, not a 409.** The plan proposed rejecting a repeated
+payment with a `409`, on the grounds that storing a transaction id meant a schema change.
+That was the wrong trade: a `409` still leaves a caller who timed out unable to find out
+whether they were charged. A nullable `transaction_id` column is one line, and it makes a
+retry return the original transaction. The smaller diff was not the better answer.
+
+**The stock race hid behind a wrong assumption about TypeORM.** The first implementation
+of the conditional update read `.length` on the result of `manager.query`. TypeORM's
+Postgres driver returns `[rows, rowCount]` for `UPDATE`, so that length was always `2`
+and every order was accepted — while the SQL underneath was correct all along. The
+concurrency spec caught it. It was later rewritten to use `createQueryBuilder`, whose
+`UpdateResult.affected` is typed, removing the assumption entirely.
+
+**Search is deliberately not invalidated by order-driven stock changes.** Product create
+and delete bump a cache version; orders do not. Invalidating on every order would make a
+60-second cache worthless in a busy catalogue, and it is not needed for correctness: the
+order path takes stock with a conditional update, so a stale listing can never produce an
+oversell. The listing is eventually consistent; the checkout is authoritative.
+
+**Finding 15 was reclassified rather than fixed.** The `relations` arrays are redundant
+with the `eager` flags, but removing `eager` would change the shape of every order
+response. That is a contract change, not a repair, so it stays documented as an
+observation.
 
 ## Out of scope
 

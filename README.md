@@ -44,6 +44,25 @@ pnpm run start:dev
 
 The API will be available at `http://localhost:3000`
 
+### Run the tests
+
+```bash
+docker compose up -d   # Postgres and Redis must be running
+pnpm test:e2e
+```
+
+The suite is end-to-end and runs against the real Postgres and Redis rather than mocks.
+That is deliberate: most of the defects it covers — transaction rollback, a concurrent
+stock race, a foreign key violation, an enum column rejecting a value, whether cache
+entries actually reach Redis — do not exist against a mocked repository, and a mocked
+suite would have passed on the broken code.
+
+Specs run serially, since they share one database.
+
+> **Note:** `compose.yaml` declares no volume for Postgres, so recreating the container
+> discards the database. `synchronize: true` then rebuilds the schema on boot, so the
+> service comes back up looking healthy on empty tables.
+
 ## API Endpoints
 
 ### Users
@@ -131,6 +150,14 @@ The API will be available at `http://localhost:3000`
 | userId | number | User reference |
 | items | array | Order items |
 | createdAt | Date | Creation timestamp |
+
+## Investigation
+
+The defects found in this codebase, and how each was fixed, are documented in:
+
+- **[PROBLEMS.md](./PROBLEMS.md)** — what was wrong, with the evidence that reproduced it
+- **[SOLUTIONS.md](./SOLUTIONS.md)** — what was changed, and the decisions behind it
+- **[CHAIN_OF_THOUGHT.md](./CHAIN_OF_THOUGHT.md)** — how the investigation was run
 
 ## Features
 

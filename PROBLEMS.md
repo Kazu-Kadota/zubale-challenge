@@ -418,16 +418,25 @@ explaining that the product is referenced by existing orders.
 
 | # | Observation | Location |
 |---|---|---|
-| 15 | Every order query drags user + items + products + categories via `eager`, which cannot be disabled in `find`/`findOne`. The explicit `relations` arrays are entirely redundant with the eager flags. | `orders.service.ts:48,59,145` |
+| 15 | Every order query drags user + items + products + categories via `eager`, which cannot be disabled in `find`/`findOne`. The explicit `relations` arrays are entirely redundant with the eager flags. Left alone: removing `eager` would change every order response's shape, which is a contract change rather than a repair. | `orders.service.ts:48,59,145` |
 | 16 | Search loads the whole `products` table and filters in JS — no SQL `WHERE`, no pagination, no index. | `products.service.ts:59` |
 | 17 | No cache invalidation on product create/update/delete, so finding 2's key stays stale for its full TTL. | `products.service.ts` |
 | 18 | `decimal` columns return **strings** from `pg`. `total += product.price * qty` works only because `*` coerces; `+` would concatenate. | `orders.service.ts:88` |
 | 19 | `compose.yaml` puts postgres on `backend` and redis on `cache-network` with no shared network. Harmless while the app runs on the host; breaks the moment it is containerised. | `compose.yaml:20,34` |
 | 20 | `synchronize: true` derives schema from entities on every boot. Renaming a property drops the old column and its data, silently. | `app.module.ts:28` |
+| 21 | `compose.yaml` declares no volume for postgres, so the database lives in the container's writable layer and is destroyed whenever the container is recreated. | `compose.yaml:3-19` |
 
-Findings 19 and 20 are **not addressed** — neither causes a reported symptom. Finding 20
+Findings 19, 20 and 21 are **not addressed** — none causes a reported symptom. Finding 20
 is expanded under [Recommendation: migrations](#recommendation-replace-synchronize-true-with-migrations)
 below.
+
+Finding 21 was discovered mid-investigation, and it explains something that looked at
+first like a bug in the test fixtures. A `docker compose up -d` recreated the containers,
+which silently destroyed every product and order from the earlier session. `synchronize:
+true` then rebuilt the schema on boot, so the service came back up looking perfectly
+healthy against an empty database — with primary key sequences restarted at 1. The two
+compound: no persistence means data loss is possible, and automatic schema creation means
+nothing announces that it happened.
 
 ---
 
