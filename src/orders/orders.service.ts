@@ -265,10 +265,11 @@ export class OrdersService {
       throw new NotFoundException(`Order #${id} not found`);
     }
 
-    const enriched: any = { ...order };
-    enriched.user = { ...order.user };
-    enriched.user.latestOrder = enriched;
-
-    return JSON.parse(JSON.stringify(enriched));
+    // The previous implementation attached the order to its own user object
+    // (`user.latestOrder = order`) and then called JSON.stringify on it, which
+    // throws on the cycle. The back-reference carried no information the caller
+    // did not already have - it pointed at the order being returned - so it is
+    // simply gone.
+    return order;
   }
 }

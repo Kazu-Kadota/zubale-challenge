@@ -117,24 +117,81 @@ export class ProductsService {
     return this.categoriesRepository.save(category);
   }
 
+  /**
+   * Builds the tree from a single query rather than from partially loaded
+   * relations.
+   *
+   * The previous implementation asked whether `parentId` was set - a plain
+   * column, present on every row - and then dereferenced `parent`, a relation
+   * loaded only one level deep. At depth one the column was set and the object
+   * was not, so it read `undefined.id`. Where it did answer, it reported
+   * grandchildren as absent for the same reason.
+   *
+   * Loading every category once and indexing it in memory removes the depth
+   * limit entirely and costs one query instead of one per node.
+   */
   async getCategoryTree(categoryId: number): Promise<any> {
-    const category = await this.findCategory(categoryId);
-    return this.buildCategoryTree(category);
-  }
+    const categories = await this.categoriesRepository.find();
 
-  private buildCategoryTree(category: Category): any {
-    const tree: any = {
-      id: category.id,
-      name: category.name,
-      children: [],
-    };
+    const byId = new Map<number, Category>();
+    const childrenOf = new Map<number, Category[]>();
 
-    if (category.parentId) {
-      tree.parent = this.buildCategoryTree(category.parent);
+    for (const category of categories) {
+      byId.set(category.id, category);
+    }
+    for (const category of categories) {
+      if (category.parentId === null || category.parentId === undefined) {
+        continue;
+      }
+      const siblings = childrenOf.get(category.parentId) ?? [];
+      siblings.push(category);
+      childrenOf.set(category.parentId, siblings);
     }
 
-    if (category.children && category.children.length > 0) {
-      tree.children = category.children.map(child => this.buildCategoryTree(child));
+    const root = byId.get(categoryId);
+    if (!root) {
+      throw new NotFoundException(`Category #${categoryId} not found`);
+    }
+
+    // `seen` guards against a cycle in the data, which would otherwise recurse
+    // until the stack gives out.
+    const descendants = (category: Category, seen: Set<number>): any => {
+      if (seen.has(category.id)) {
+        return { id: category.id, name: category.name, children: [] };
+      }
+      seen.add(category.id);
+
+      return {
+        id: category.id,
+        name: category.name,
+        children: (childrenOf.get(category.id) ?? []).map((child) =>
+          descendants(child, seen),
+        ),
+      };
+    };
+
+    const ancestors = (parentId: number | null, seen: Set<number>): any => {
+      if (parentId === null || parentId === undefined || seen.has(parentId)) {
+        return undefined;
+      }
+      seen.add(parentId);
+
+      const parent = byId.get(parentId);
+      if (!parent) {
+        return undefined;
+      }
+
+      return {
+        id: parent.id,
+        name: parent.name,
+        parent: ancestors(parent.parentId, seen),
+      };
+    };
+
+    const tree = descendants(root, new Set<number>());
+    const chain = ancestors(root.parentId, new Set<number>([root.id]));
+    if (chain) {
+      tree.parent = chain;
     }
 
     return tree;
